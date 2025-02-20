@@ -29,8 +29,22 @@ def parse_ptbxl_data()->pd.DataFrame:
     """
     #TODO: Implement this function
     
-    #return result_df
-    return
+    ptbxl_df = pd.read_csv('ptbxl_sample.csv')
+    scp_statements_df = pd.read_csv('scp_statements.csv')
+
+    scp_to_diagnostic = scp_statements_df.set_index('Unnamed: 0')['diagnostic_class'].to_dict()
+
+    def map_scp_to_diagnostic(scp_codes):
+        scp_dict = ast.literal_eval(scp_codes)
+        diagnostic_classes = {'NORM', 'MI', 'STTC', 'CD', 'HYP'}
+        return list(set(scp_to_diagnostic[code] for code in scp_dict) & diagnostic_classes)
+
+    ptbxl_df['diagnostic_class'] = ptbxl_df['scp_codes'].apply(map_scp_to_diagnostic)
+
+    result_df = ptbxl_df[ptbxl_df['diagnostic_class'].apply(len) > 0]
+    result_df = result_df[['ecg_id', 'filename_lr', 'diagnostic_class']]
+
+    return result_df
 
 
 # Step-1, part 2
@@ -56,8 +70,17 @@ def create_dataset(df: pd.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     # you can read the raw ECG signal with this function:
     # ECG_signal, _ = wfdb.rdsamp("filename_lr")
 
-    # return data_x, data_y
-    return
+    label_order = ['NORM', 'MI', 'STTC', 'CD', 'HYP']
+    num_samples = len(df)
+    data_x = np.zeros((num_samples, 1000, 12))
+    data_y = np.zeros((num_samples, len(label_order)))
+
+    for i, (filepath, labels) in enumerate(zip(df['filename_lr'], df['diagnostic_class'])):
+        ecg_signal, _ = wfdb.rdsamp(filepath)
+        data_x[i] = ecg_signal[:1000, :12]
+        data_y[i] = [1 if label in labels else 0 for label in label_order]
+
+    return data_x, data_y
 
 # Step-2:
 def data_preprocessing(data_x: np.ndarray, data_y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -74,8 +97,28 @@ def data_preprocessing(data_x: np.ndarray, data_y: np.ndarray) -> tuple[np.ndarr
 
     #TODO: Implement this function.
 
-    # return data_x_normalized, data_y_normalized
-    return
+    for i in range(data_x.shape[0]):
+        for j in range(data_x.shape[2]):  # Iterate over channels
+            channel = data_x[i, :, j]
+            
+            # Handle missing values
+            mask = np.isnan(channel)
+            channel[mask] = np.interp(np.flatnonzero(mask), np.flatnonzero(~mask), channel[~mask])
+            
+            # Handle outliers
+            lower_bound, upper_bound = np.percentile(channel, [3, 97])
+            channel = np.clip(channel, lower_bound, upper_bound)
+            
+            # Normalize
+            xmin, xmax = np.min(channel), np.max(channel)
+            if xmax > xmin:
+                channel = (channel - xmin) / (xmax - xmin)
+            else:
+                channel = np.zeros_like(channel)
+            
+            data_x[i, :, j] = channel
+
+    return data_x, data_y
 
 
 # Step-3
@@ -93,5 +136,16 @@ def split_data(data_x: np.ndarray, data_y: np.ndarray) -> tuple[Dict[str, np.nda
     #                  "data_y": np.ndarray}
     #return train_dataset, val_dataset, test_dataset.
 
-    # return train_dataset, val_dataset, test_dataset
-    return
+    num_samples = data_x.shape[0]
+    
+    train_end_index = int(0.7 * num_samples)
+    val_end_index = int(0.9 * num_samples)
+    
+    train_dataset = {"data_x": data_x[:train_end_index],
+                     "data_y": data_y[:train_end_index]}
+    val_dataset   = {"data_x": data_x[train_end_index:val_end_index],
+                     "data_y": data_y[train_end_index:val_end_index]}
+    test_dataset  = {"data_x": data_x[val_end_index:],
+                     "data_y": data_y[val_end_index:]}
+    
+    return train_dataset, val_dataset, test_dataset
